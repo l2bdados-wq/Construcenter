@@ -1,0 +1,48 @@
+[debug] [2026-11-17T18:03:08.541Z] ----------------------------------------------------------------------
+[debug] [2026-11-17T18:03:08.565Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\Lucas\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --project construcenter-3437a --non-interactive
+[debug] [2026-11-17T18:03:08.566Z] CLI Version:   15.36.0
+[debug] [2026-11-17T18:03:08.566Z] Platform:      win32
+[debug] [2026-11-17T18:03:08.566Z] Node Version:  v24.22.3
+[debug] [2026-11-17T18:03:08.567Z] Detected Agent: antigravity
+[debug] [2026-11-17T18:03:08.567Z] Time:          Tue Nov 17 2026 15:03:08 GMT-0300 (Horário Padrão de Brasília)
+[debug] [2026-11-17T18:03:08.568Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-11-17T18:03:08.622Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[debug] [2026-11-17T18:03:24.828Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-11-17T18:03:24.830Z] > authorizing via signed-in user (lucasjncomercio@gmail.com)
+[debug] [2026-11-17T18:03:24.831Z] [iam] checking project construcenter-3437a for permissions ["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get","firebasehosting.sites.update"]
+[debug] [2026-11-17T18:03:24.833Z] Checked if tokens are valid: false, expires at: 1794845610021
+[debug] [2026-11-17T18:03:24.833Z] Checked if tokens are valid: false, expires at: 1794845610021
+[debug] [2026-11-17T18:03:24.834Z] > refreshing access token with scopes: []
+[debug] [2026-11-17T18:03:24.838Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-11-17T18:03:24.838Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-11-17T18:03:25.289Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-11-17T18:03:25.289Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-11-17T18:03:25.321Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/construcenter-3437a:testIamPermissions [none]
+[debug] [2026-11-17T18:03:25.321Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/construcenter-3437a:testIamPermissions  x-goog-user-project=construcenter-3437a
+[debug] [2026-11-17T18:03:25.321Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/construcenter-3437a:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get","firebasehosting.sites.update"]}
+[debug] [2026-11-17T18:03:25.328Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2026-11-17T18:03:25.328Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
+[debug] [2026-11-17T18:03:26.354Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/construcenter-3437a:testIamPermissions 403
+[debug] [2026-11-17T18:03:26.355Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/construcenter-3437a:testIamPermissions {"error":{"code":403,"message":"Caller does not have required permission to use project construcenter-3437a. Grant the caller the roles/serviceusage.serviceUsageConsumer role, or a custom role with the serviceusage.services.use permission, by visiting https://console.developers.google.com/iam-admin/iam?project=construcenter-3437a and then retry. Propagation of the new permission may take a few minutes.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"USER_PROJECT_DENIED","domain":"googleapis.com","metadata":{"service":"cloudresourcemanager.googleapis.com","consumer":"projects/construcenter-3437a","consoleUrl":"https://console.developers.google.com/iam-admin/iam?project=construcenter-3437a","containerInfo":"construcenter-3437a"}},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"Caller does not have required permission to use project construcenter-3437a. Grant the caller the roles/serviceusage.serviceUsageConsumer role, or a custom role with the serviceusage.services.use permission, by visiting https://console.developers.google.com/iam-admin/iam?project=construcenter-3437a and then retry. Propagation of the new permission may take a few minutes."},{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Google developer console IAM admin","url":"https://console.developers.google.com/iam-admin/iam?project=construcenter-3437a"}]}]}}
+[debug] [2026-11-17T18:03:26.356Z] [iam] error while checking permissions, command may fail: Request to https://cloudresourcemanager.googleapis.com/v1/projects/construcenter-3437a:testIamPermissions had HTTP Error: 403, Caller does not have required permission to use project construcenter-3437a. Grant the caller the roles/serviceusage.serviceUsageConsumer role, or a custom role with the serviceusage.services.use permission, by visiting https://console.developers.google.com/iam-admin/iam?project=construcenter-3437a and then retry. Propagation of the new permission may take a few minutes.
+[debug] [2026-11-17T18:03:26.358Z] Checked if tokens are valid: true, expires at: 1794942204289
+[debug] [2026-11-17T18:03:26.359Z] Checked if tokens are valid: true, expires at: 1794942204289
+[debug] [2026-11-17T18:03:26.359Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/construcenter-3437a/services/firebasehosting.googleapis.com [none]
+[debug] [2026-11-17T18:03:26.359Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/construcenter-3437a/services/firebasehosting.googleapis.com  x-goog-user-project=construcenter-3437a
+[debug] [2026-11-17T18:03:27.663Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/construcenter-3437a/services/firebasehosting.googleapis.com 403
+[debug] [2026-11-17T18:03:27.663Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/construcenter-3437a/services/firebasehosting.googleapis.com [omitted]
+[debug] [2026-11-17T18:03:27.665Z] [hosting] failed to ensure Hosting API is enabled: Request to https://serviceusage.googleapis.com/v1/projects/construcenter-3437a/services/firebasehosting.googleapis.com had HTTP Error: 403, Caller does not have required permission to use project construcenter-3437a. Grant the caller the roles/serviceusage.serviceUsageConsumer role, or a custom role with the serviceusage.services.use permission, by visiting https://console.developers.google.com/iam-admin/iam?project=construcenter-3437a and then retry. Propagation of the new permission may take a few minutes.
+[warn] !  hosting: Unable to check whether firebasehosting.googleapis.com is enabled on project construcenter-3437a. Grant the caller the roles/serviceusage.serviceUsageConsumer role to check API enablement, or ensure the API is enabled at https://console.cloud.google.com/apis/library/firebasehosting.googleapis.com?project=construcenter-3437a if subsequent requests fail. 
+[debug] [2026-11-17T18:03:27.668Z] Checked if tokens are valid: true, expires at: 1794942204289
+[debug] [2026-11-17T18:03:27.668Z] Checked if tokens are valid: true, expires at: 1794942204289
+[debug] [2026-11-17T18:03:27.668Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/construcenter-3437a [none]
+[debug] [2026-11-17T18:03:28.255Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/construcenter-3437a 403
+[debug] [2026-11-17T18:03:28.255Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/construcenter-3437a {"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}
+[debug] [2026-11-17T18:03:28.256Z] Request to https://firebase.googleapis.com/v1beta1/projects/construcenter-3437a had HTTP Error: 403, The caller does not have permission
+[debug] [2026-11-17T18:03:28.265Z] FirebaseError: Request to https://firebase.googleapis.com/v1beta1/projects/construcenter-3437a had HTTP Error: 403, The caller does not have permission
+    at responseToError (C:\Users\Lucas\AppData\Roaming\npm\node_modules\firebase-tools\lib\responseToError.js:53:12)
+    at RetryOperation._fn (C:\Users\Lucas\AppData\Roaming\npm\node_modules\firebase-tools\lib\apiv2.js:415:77)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+[error] 
+[error] Error: Failed to get Firebase project construcenter-3437a. Please make sure the project exists and your account has permission to access it.
