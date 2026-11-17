@@ -176,17 +176,20 @@ async function refreshSession(fbUser) {
     appShell.classList.add('hidden');
     authScreen.classList.remove('hidden');
     const setupGroup = document.getElementById('setup-name-group');
+    const forgotBtn = document.getElementById('forgot-password-btn');
     const title = document.getElementById('auth-title');
     const sub = document.getElementById('auth-subtitle');
     const btn = document.getElementById('auth-submit-btn');
 
     if (state.needsSetup) {
       setupGroup.classList.remove('hidden');
+      forgotBtn.classList.add('hidden');
       title.textContent = 'Configuração Inicial';
       sub.textContent = 'Crie o primeiro usuário Administrador para iniciar o sistema';
       btn.textContent = 'Criar Administrador e Entrar';
     } else {
       setupGroup.classList.add('hidden');
+      forgotBtn.classList.remove('hidden');
       title.textContent = 'Acesso ao Sistema';
       sub.textContent = 'Controle de Retiradas e Contas em Aberto';
       btn.textContent = 'Entrar';
@@ -252,6 +255,34 @@ document.getElementById('auth-form').addEventListener('submit', async (e) => {
       await refreshSession(cred.user);
     }
     document.getElementById('auth-password').value = '';
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove('hidden');
+  }
+});
+
+document.getElementById('forgot-password-btn').addEventListener('click', async () => {
+  const errEl = document.getElementById('auth-error');
+  const infoEl = document.getElementById('auth-info');
+  errEl.classList.add('hidden');
+  infoEl.classList.add('hidden');
+  const input = document.getElementById('auth-username').value.trim();
+
+  if (!input) {
+    errEl.textContent = 'Digite seu e-mail no campo acima e clique novamente em "Esqueci minha senha".';
+    errEl.classList.remove('hidden');
+    return;
+  }
+  if (!input.includes('@')) {
+    errEl.textContent = 'A recuperação por e-mail funciona apenas para contas cadastradas com um e-mail válido. Para usuários simples, peça ao Administrador para redefinir no Console do Firebase.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  try {
+    await auth.sendPasswordResetEmail(input.toLowerCase());
+    infoEl.textContent = `Enviamos um link de redefinição de senha para ${input.toLowerCase()}. Verifique sua caixa de entrada e spam.`;
+    infoEl.classList.remove('hidden');
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove('hidden');
