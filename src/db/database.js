@@ -1,4 +1,5 @@
 const { DatabaseSync } = require('node:sqlite');
+const { createClient } = require('@libsql/client');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -11,9 +12,11 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(TENANTS_DIR)) fs.mkdirSync(TENANTS_DIR, { recursive: true });
 
 const tenantStorage = new AsyncLocalStorage();
-const dbCache = new Map();
+const txStorage = new AsyncLocalStorage();
+const adapterCache = new Map();
+const schemaInitialized = new Set();
 
-// Master database for tenant registry (ignored when single-file DB_PATH is forced for tests)
+// Master database for tenant registry
 const MASTER_DB_PATH = path.join(DATA_DIR, 'master.db');
 const masterDb = new DatabaseSync(MASTER_DB_PATH);
 masterDb.exec('PRAGMA journal_mode = WAL;');
@@ -22,21 +25,27 @@ masterDb.exec(`
     slug TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
+    turso_url TEXT DEFAULT '',
+    turso_token TEXT DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
   );
 `);
 
-// Seed default tenant 'construcenter'
+// Ensure columns exist if upgrading from earlier master.db
+try {
+  masterDb.exec("ALTER TABLE tenants ADD COLUMN turso_url TEXT DEFAULT ''");
+} catch (_) {}
+try {
+  masterDb.exec("ALTER TABLE tenants ADD COLUMN turso_token TEXT DEFAULT ''");
+} catch (_) {}
+
 masterDb
   .prepare('INSERT OR IGNORE INTO tenants (slug, name, active) VALUES (?, ?, 1)')
   .run('construcenter', 'CONSTRUCENTER');
 
-function initTenantSchema(database, storeName = 'CONSTRUCENTER') {
-  database.exec('PRAGMA journal_mode = WAL;');
-  database.exec('PRAGMA foreign_keys = ON;');
-  database.exec('PRAGMA busy_timeout = 5000;');
-
-  database.exec(`
+function buildSchemaSQL(storeName = 'CONSTRUCENTER') {
+  const safeName = String(storeName || 'CONSTRUCENTER').replace(/'/g, "''");
+  return `
     CREATE TABLE IF NOT EXISTS store_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       name TEXT NOT NULL DEFAULT 'CONSTRUCENTER',
@@ -47,7 +56,7 @@ function initTenantSchema(database, storeName = 'CONSTRUCENTER') {
       footer_note TEXT DEFAULT 'Pedido — sem valor fiscal'
     );
 
-    INSERT OR IGNORE INTO store_settings (id, name) VALUES (1, '${storeName.replace(/'/g, "''")}');
+    INSERT OR IGNORE INTO store_settings (id, name) VALUES (1, '${safeName}');
 
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,7 +204,7 @@ function initTenantSchema(database, storeName = 'CONSTRUCENTER') {
       details TEXT DEFAULT '',
       created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
     );
-  `);
+  `;
 }
 
 function getTenantPaths(slug = DEFAULT_TENANT) {
@@ -211,7 +220,6 @@ function getTenantPaths(slug = DEFAULT_TENANT) {
     };
   }
 
-  // Legacy single-tenant DB support for default tenant if data/construcenter.db already exists
   const legacyDb = path.join(DATA_DIR, 'construcenter.db');
   const tenantDir = path.join(TENANTS_DIR, safeSlug);
   const tenantDb = path.join(tenantDir, 'store.db');
@@ -237,53 +245,174 @@ function getTenantPaths(slug = DEFAULT_TENANT) {
   };
 }
 
-function getTenantDb(slugOverride = null) {
-  const ctx = tenantStorage.getStore();
-  const slug = slugOverride || ctx?.slug || DEFAULT_TENANT;
-  const paths = getTenantPaths(slug);
-
-  if (dbCache.has(paths.dbPath)) {
-    return dbCache.get(paths.dbPath);
+function getTursoConfig(slug) {
+  const tenantRow = masterDb.prepare('SELECT turso_url, turso_token FROM tenants WHERE slug = ?').get(slug);
+  if (tenantRow?.turso_url) {
+    return { url: tenantRow.turso_url, authToken: tenantRow.turso_token };
   }
-
-  const database = new DatabaseSync(paths.dbPath);
-  const tenantRow = masterDb.prepare('SELECT name FROM tenants WHERE slug = ?').get(slug);
-  initTenantSchema(database, tenantRow?.name || slug.toUpperCase());
-  dbCache.set(paths.dbPath, database);
-  return database;
+  if (slug === DEFAULT_TENANT && process.env.TURSO_DATABASE_URL) {
+    return {
+      url: process.env.TURSO_DATABASE_URL,
+      authToken: process.env.TURSO_AUTH_TOKEN || '',
+    };
+  }
+  return null;
 }
 
-// Proxy so existing `db.prepare(...)` and `db.exec(...)` work transparently per tenant
-const db = new Proxy(
-  {},
-  {
-    get(_target, prop) {
-      const activeDb = getTenantDb();
-      const val = activeDb[prop];
-      return typeof val === 'function' ? val.bind(activeDb) : val;
+function createLocalAdapter(dbPath, storeName) {
+  const nativeDb = new DatabaseSync(dbPath);
+  nativeDb.exec('PRAGMA journal_mode = WAL;');
+  nativeDb.exec('PRAGMA foreign_keys = ON;');
+  nativeDb.exec('PRAGMA busy_timeout = 5000;');
+  nativeDb.exec(buildSchemaSQL(storeName));
+
+  return {
+    isTurso: false,
+    nativeDb,
+    async get(sql, ...params) {
+      return nativeDb.prepare(sql).get(...params);
     },
+    async all(sql, ...params) {
+      return nativeDb.prepare(sql).all(...params);
+    },
+    async run(sql, ...params) {
+      const info = nativeDb.prepare(sql).run(...params);
+      return {
+        lastInsertRowid: Number(info.lastInsertRowid || 0),
+        changes: Number(info.changes || 0),
+      };
+    },
+    async exec(sql) {
+      nativeDb.exec(sql);
+    },
+    async transaction(fn) {
+      nativeDb.exec('BEGIN IMMEDIATE;');
+      try {
+        const result = await fn();
+        nativeDb.exec('COMMIT;');
+        return result;
+      } catch (err) {
+        try {
+          nativeDb.exec('ROLLBACK;');
+        } catch (_) {}
+        throw err;
+      }
+    },
+  };
+}
+
+function normalizeRow(row) {
+  if (!row) return undefined;
+  const out = {};
+  for (const [k, v] of Object.entries(row)) {
+    out[k] = typeof v === 'bigint' ? Number(v) : v;
   }
-);
+  return out;
+}
+
+function createTursoAdapter(slug, tursoCfg, storeName) {
+  const client = createClient({
+    url: tursoCfg.url,
+    authToken: tursoCfg.authToken,
+  });
+
+  async function ensureSchema() {
+    if (schemaInitialized.has(tursoCfg.url)) return;
+    await client.execute('PRAGMA foreign_keys = ON;');
+    await client.executeMultiple(buildSchemaSQL(storeName));
+    schemaInitialized.add(tursoCfg.url);
+  }
+
+  return {
+    isTurso: true,
+    client,
+    async get(sql, ...params) {
+      await ensureSchema();
+      const activeTx = txStorage.getStore();
+      const target = activeTx || client;
+      const res = await target.execute({ sql, args: params });
+      return normalizeRow(res.rows[0]);
+    },
+    async all(sql, ...params) {
+      await ensureSchema();
+      const activeTx = txStorage.getStore();
+      const target = activeTx || client;
+      const res = await target.execute({ sql, args: params });
+      return res.rows.map(normalizeRow);
+    },
+    async run(sql, ...params) {
+      await ensureSchema();
+      const activeTx = txStorage.getStore();
+      const target = activeTx || client;
+      const res = await target.execute({ sql, args: params });
+      return {
+        lastInsertRowid: Number(res.lastInsertRowid || 0),
+        changes: Number(res.rowsAffected || 0),
+      };
+    },
+    async exec(sql) {
+      await ensureSchema();
+      await client.executeMultiple(sql);
+    },
+    async transaction(fn) {
+      await ensureSchema();
+      const tx = await client.transaction('write');
+      try {
+        const result = await txStorage.run(tx, fn);
+        await tx.commit();
+        return result;
+      } catch (err) {
+        try {
+          await tx.rollback();
+        } catch (_) {}
+        throw err;
+      }
+    },
+  };
+}
+
+function getTenantAdapter(slugOverride = null) {
+  const ctx = tenantStorage.getStore();
+  const slug = slugOverride || ctx?.slug || DEFAULT_TENANT;
+  const tursoCfg = !process.env.DB_PATH ? getTursoConfig(slug) : null;
+  const cacheKey = tursoCfg ? `turso:${tursoCfg.url}` : `local:${getTenantPaths(slug).dbPath}`;
+
+  if (adapterCache.has(cacheKey)) {
+    return adapterCache.get(cacheKey);
+  }
+
+  const tenantRow = masterDb.prepare('SELECT name FROM tenants WHERE slug = ?').get(slug);
+  const storeName = tenantRow?.name || slug.toUpperCase();
+
+  const adapter = tursoCfg
+    ? createTursoAdapter(slug, tursoCfg, storeName)
+    : createLocalAdapter(getTenantPaths(slug).dbPath, storeName);
+
+  adapterCache.set(cacheKey, adapter);
+  return adapter;
+}
+
+const db = {
+  get(sql, ...params) {
+    return getTenantAdapter().get(sql, ...params);
+  },
+  all(sql, ...params) {
+    return getTenantAdapter().all(sql, ...params);
+  },
+  run(sql, ...params) {
+    return getTenantAdapter().run(sql, ...params);
+  },
+  exec(sql) {
+    return getTenantAdapter().exec(sql);
+  },
+};
 
 function getCurrentTenantSlug() {
   return tenantStorage.getStore()?.slug || DEFAULT_TENANT;
 }
 
 function runTransaction(fn) {
-  const activeDb = getTenantDb();
-  activeDb.exec('BEGIN IMMEDIATE;');
-  try {
-    const result = fn();
-    activeDb.exec('COMMIT;');
-    return result;
-  } catch (err) {
-    try {
-      activeDb.exec('ROLLBACK;');
-    } catch (_) {
-      // ignore rollback error
-    }
-    throw err;
-  }
+  return getTenantAdapter().transaction(fn);
 }
 
 function getTenant(slug) {
@@ -294,7 +423,7 @@ function listTenants() {
   return masterDb.prepare('SELECT * FROM tenants ORDER BY created_at ASC').all();
 }
 
-function createTenant(slug, name) {
+function createTenant(slug, name, tursoUrl = '', tursoToken = '') {
   const cleanSlug = String(slug || '')
     .trim()
     .toLowerCase()
@@ -307,10 +436,8 @@ function createTenant(slug, name) {
     throw new Error(`Já existe um sistema cadastrado com o subdomínio "${cleanSlug}".`);
   }
   masterDb
-    .prepare('INSERT INTO tenants (slug, name, active) VALUES (?, ?, 1)')
-    .run(cleanSlug, String(name || cleanSlug).trim());
-  // Initialize its database immediately
-  getTenantDb(cleanSlug);
+    .prepare('INSERT INTO tenants (slug, name, active, turso_url, turso_token) VALUES (?, ?, 1, ?, ?)')
+    .run(cleanSlug, String(name || cleanSlug).trim(), String(tursoUrl || '').trim(), String(tursoToken || '').trim());
   return getTenant(cleanSlug);
 }
 
@@ -329,7 +456,7 @@ module.exports = {
   tenantStorage,
   DATA_DIR,
   DEFAULT_TENANT,
-  getTenantDb,
+  getTenantAdapter,
   getTenantPaths,
   getCurrentTenantSlug,
   runTransaction,

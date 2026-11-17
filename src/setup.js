@@ -11,7 +11,8 @@ const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
 
 async function main() {
   console.log('=== Construcenter - Configuração Inicial do Banco e Administrador ===');
-  const existing = db.prepare('SELECT COUNT(*) AS cnt FROM users').get().cnt;
+  const existingRow = await db.get('SELECT COUNT(*) AS cnt FROM users');
+  const existing = existingRow?.cnt || 0;
   if (existing > 0) {
     console.log(`Já existem ${existing} usuário(s) cadastrado(s).`);
     rl.close();
@@ -29,9 +30,13 @@ async function main() {
   }
 
   const hash = bcrypt.hashSync(password, 10);
-  db.prepare(
-    'INSERT INTO users (name, username, password_hash, role, active) VALUES (?, ?, ?, ?, 1)'
-  ).run(name, username, hash, 'admin');
+  await db.run(
+    'INSERT INTO users (name, username, password_hash, role, active) VALUES (?, ?, ?, ?, 1)',
+    name,
+    username,
+    hash,
+    'admin'
+  );
 
   console.log(`\nAdministrador "${username}" criado com sucesso!`);
   console.log('Execute "npm start" e acesse http://localhost:3000');

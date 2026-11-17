@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const {
-  getTenantDb,
+  getTenantAdapter,
   getTenantPaths,
   getCurrentTenantSlug,
   listTenants,
@@ -10,8 +10,18 @@ const {
 const MAX_BACKUPS = 30;
 const AUTO_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
-function createBackup(prefix = 'auto', slugOverride = null) {
+async function createBackup(prefix = 'auto', slugOverride = null) {
   const slug = slugOverride || getCurrentTenantSlug();
+  const adapter = getTenantAdapter(slug);
+  if (adapter.isTurso) {
+    return {
+      filename: 'turso_cloud_managed',
+      size: 0,
+      createdAt: new Date().toISOString(),
+      cloudManaged: true,
+    };
+  }
+
   const { backupDir } = getTenantPaths(slug);
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true });
@@ -24,7 +34,7 @@ function createBackup(prefix = 'auto', slugOverride = null) {
   const dest = path.join(backupDir, filename);
 
   const escaped = dest.replace(/'/g, "''");
-  getTenantDb(slug).exec(`VACUUM INTO '${escaped}';`);
+  await adapter.exec(`VACUUM INTO '${escaped}';`);
 
   pruneOldBackups(slug);
   const stat = fs.statSync(dest);
@@ -33,6 +43,9 @@ function createBackup(prefix = 'auto', slugOverride = null) {
 
 function listBackups(slugOverride = null) {
   const slug = slugOverride || getCurrentTenantSlug();
+  const adapter = getTenantAdapter(slug);
+  if (adapter.isTurso) return [];
+
   const { backupDir } = getTenantPaths(slug);
   if (!fs.existsSync(backupDir)) return [];
   return fs
@@ -58,21 +71,21 @@ function pruneOldBackups(slugOverride = null) {
   for (const old of files.slice(MAX_BACKUPS)) {
     try {
       fs.unlinkSync(path.join(backupDir, old.filename));
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
   }
 }
 
-function runBackupAllTenants() {
+async function runBackupAllTenants() {
   const tenants = listTenants().filter((t) => t.active);
   const sixHoursAgo = Date.now() - AUTO_INTERVAL_MS;
   for (const t of tenants) {
     try {
+      const adapter = getTenantAdapter(t.slug);
+      if (adapter.isTurso) continue;
       const backups = listBackups(t.slug);
       const hasRecent = backups.some((b) => new Date(b.createdAt).getTime() > sixHoursAgo);
       if (!hasRecent) {
-        createBackup('auto', t.slug);
+        await createBackup('auto', t.slug);
       }
     } catch (err) {
       console.error(`Erro no backup automático (${t.slug}):`, err.message);
@@ -81,8 +94,10 @@ function runBackupAllTenants() {
 }
 
 function startAutoBackup() {
-  runBackupAllTenants();
-  const timer = setInterval(runBackupAllTenants, AUTO_INTERVAL_MS);
+  runBackupAllTenants().catch(() => {});
+  const timer = setInterval(() => {
+    runBackupAllTenants().catch(() => {});
+  }, AUTO_INTERVAL_MS);
   timer.unref();
 }
 
