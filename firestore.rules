@@ -1,0 +1,98 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc(tenantId) {
+      return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid));
+    }
+
+    function isActiveUser(tenantId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid))
+        && userDoc(tenantId).data.active == true;
+    }
+
+    function userRole(tenantId) {
+      return userDoc(tenantId).data.role;
+    }
+
+    function isAdmin(tenantId) {
+      return isActiveUser(tenantId) && userRole(tenantId) == 'admin';
+    }
+
+    function isManagerOrAdmin(tenantId) {
+      return isActiveUser(tenantId) && (userRole(tenantId) == 'admin' || userRole(tenantId) == 'gerente');
+    }
+
+    match /tenants/{tenantId} {
+      // Meta documents (config, counters, store_settings)
+      match /meta/{docId} {
+        allow read: if docId == 'config' || docId == 'store_settings' || isActiveUser(tenantId);
+        // Allow initial setup of config & store_settings when not yet initialized
+        allow create: if isSignedIn() && (
+          !exists(/databases/$(database)/documents/tenants/$(tenantId)/meta/config)
+          || isAdmin(tenantId)
+        );
+        allow update: if isAdmin(tenantId)
+          || (docId == 'counters' && isActiveUser(tenantId));
+      }
+
+      // Users & roles
+      match /users/{uid} {
+        allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin(tenantId));
+        // Allow creating the very first admin if tenant is not initialized yet
+        allow create: if isSignedIn() && (
+          (!exists(/databases/$(database)/documents/tenants/$(tenantId)/meta/config) && request.auth.uid == uid && request.resource.data.role == 'admin')
+          || isAdmin(tenantId)
+        );
+        allow update: if isAdmin(tenantId);
+        allow delete: if isAdmin(tenantId);
+      }
+
+      // Customers & authorized people
+      match /customers/{customerId} {
+        allow read: if isActiveUser(tenantId);
+        allow create, update: if isActiveUser(tenantId);
+        allow delete: if isAdmin(tenantId);
+      }
+
+      // Products
+      match /products/{productId} {
+        allow read: if isActiveUser(tenantId);
+        allow create, update: if isActiveUser(tenantId);
+        allow delete: if isAdmin(tenantId);
+      }
+
+      // Withdrawals
+      match /withdrawals/{withdrawalId} {
+        allow read: if isActiveUser(tenantId);
+        allow create: if isActiveUser(tenantId)
+          && (request.resource.data.discount_cents == 0 || isManagerOrAdmin(tenantId));
+        // Direct edits on closed withdrawals are blocked unless manager/admin with correction or order closing
+        allow update: if isActiveUser(tenantId) && (
+          (resource.data.status == 'aberta' && request.resource.data.status == 'aberta'
+            && (request.resource.data.discount_cents == resource.data.discount_cents || isManagerOrAdmin(tenantId)))
+          || isManagerOrAdmin(tenantId)
+        );
+        allow delete: if false;
+      }
+
+      // Orders
+      match /orders/{orderId} {
+        allow read: if isActiveUser(tenantId);
+        allow create, update: if isManagerOrAdmin(tenantId);
+        allow delete: if false;
+      }
+
+      // Audit logs (append-only)
+      match /audit_logs/{logId} {
+        allow read: if isManagerOrAdmin(tenantId);
+        allow create: if isActiveUser(tenantId);
+        allow update, delete: if false;
+      }
+    }
+  }
+}
