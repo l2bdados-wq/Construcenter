@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>L2 Sistemas — Portal Multi-Empresas</title>
+  <link rel="stylesheet" href="/styles.css?v=5" />
+</head>
+<body>
+  <div style="max-width:900px;margin:40px auto;padding:0 16px">
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div>
+        <h1 style="margin:0;font-size:1.5rem">L2 Sistemas — Painel Cloud</h1>
+        <p class="muted" style="margin:4px 0 0">Gerenciamento de sistemas por subdomínio (<code>*.l2sistemas.api.br</code>)</p>
+      </div>
+      <div id="sa-auth-box" style="display:flex;gap:8px;align-items:center">
+        <input type="password" id="sa-key" placeholder="Chave Super-Admin" style="width:200px" />
+        <button class="btn btn-dark" id="sa-login-btn">Acessar</button>
+      </div>
+    </div>
+
+    <div id="sa-panel" class="hidden">
+      <div class="card">
+        <h2 class="card-title">Cadastrar Nova Loja / Cliente</h2>
+        <form id="sa-create-form" class="grid-3" style="align-items:end">
+          <div>
+            <label>Subdomínio (slug) *</label>
+            <input type="text" id="sa-slug" required placeholder="ex: eletricasilva" pattern="[a-z0-9-]+" />
+          </div>
+          <div>
+            <label>Nome da Loja *</label>
+            <input type="text" id="sa-name" required placeholder="ex: Elétrica Silva" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-lg">➕ Criar Sistema</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title">Sistemas Ativos</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Subdomínio</th><th>Nome</th><th>Endereço</th><th>Status</th><th></th></tr></thead>
+            <tbody id="sa-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let adminKey = '';
+    async function saApi(url, opts = {}) {
+      const res = await fetch(url, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', 'x-super-admin-key': adminKey, ...(opts.headers || {}) },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Erro');
+      return data;
+    }
+
+    async function loadTenants() {
+      const data = await saApi('/api/superadmin/tenants');
+      document.getElementById('sa-panel').classList.remove('hidden');
+      document.getElementById('sa-tbody').innerHTML = data.tenants.map(t => `
+        <tr>
+          <td><strong>${t.slug}</strong></td>
+          <td>${t.name}</td>
+          <td><a href="${t.url}" target="_blank">${t.url}</a></td>
+          <td><span class="badge badge-${t.active ? 'ativo' : 'inativo'}">${t.active ? 'Ativo' : 'Suspenso'}</span></td>
+          <td class="text-right">
+            <button class="btn btn-sm ${t.active ? 'btn-danger' : 'btn-success'} sa-toggle" data-slug="${t.slug}" data-active="${t.active ? 0 : 1}">
+              ${t.active ? 'Suspender' : 'Ativar'}
+            </button>
+          </td>
+        </tr>
+      `).join('');
+
+      document.querySelectorAll('.sa-toggle').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await saApi('/api/superadmin/tenants/' + btn.dataset.slug + '/status', {
+            method: 'PATCH',
+            body: JSON.stringify({ active: btn.dataset.active === '1' }),
+          });
+          loadTenants();
+        });
+      });
+    }
+
+    document.getElementById('sa-login-btn').addEventListener('click', async () => {
+      adminKey = document.getElementById('sa-key').value;
+      try { await loadTenants(); } catch (e) { alert(e.message); }
+    });
+
+    document.getElementById('sa-create-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await saApi('/api/superadmin/tenants', {
+          method: 'POST',
+          body: JSON.stringify({
+            slug: document.getElementById('sa-slug').value,
+            name: document.getElementById('sa-name').value,
+          }),
+        });
+        document.getElementById('sa-slug').value = '';
+        document.getElementById('sa-name').value = '';
+        loadTenants();
+      } catch (err) { alert(err.message); }
+    });
+  </script>
+</body>
+</html>

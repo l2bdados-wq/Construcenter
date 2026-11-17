@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    container_name: l2sistemas-app
+    restart: unless-stopped
+    environment:
+      - PORT=3000
+      - DATA_DIR=/app/data
+      - BASE_DOMAIN=l2sistemas.api.br
+      - DEFAULT_TENANT=construcenter
+      - SUPER_ADMIN_KEY=${SUPER_ADMIN_KEY:-TroqueEstaChaveForte2026}
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:3000:3000"

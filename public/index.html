@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Construcenter — Controle de Retiradas e Pedidos</title>
+  <link rel="icon" href="/logo.jpeg?v=5" type="image/jpeg" />
+  <link rel="stylesheet" href="/styles.css?v=5" />
+</head>
+<body>
+  <!-- Auth / Setup Screen -->
+  <div id="auth-screen" class="auth-screen hidden">
+    <div class="auth-card">
+      <img src="/logo.jpeg?v=3" alt="Construcenter" class="auth-logo" />
+      <h1 id="auth-title">Acesso ao Sistema</h1>
+      <p id="auth-subtitle" class="muted">Controle de Retiradas e Contas em Aberto</p>
+      <form id="auth-form" class="form-stack">
+        <div id="setup-name-group" class="hidden">
+          <label for="auth-name">Nome Completo do Administrador</label>
+          <input type="text" id="auth-name" />
+        </div>
+        <div>
+          <label for="auth-username">Usuário</label>
+          <input type="text" id="auth-username" required autocomplete="username" placeholder="Digite seu usuário" />
+        </div>
+        <div>
+          <label for="auth-password">Senha</label>
+          <input type="password" id="auth-password" required autocomplete="current-password" placeholder="Digite sua senha" />
+        </div>
+        <div id="auth-error" class="alert alert-error hidden"></div>
+        <button type="submit" class="btn btn-primary btn-lg" id="auth-submit-btn">Entrar</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main App Shell -->
+  <div id="app-shell" class="app-shell hidden">
+    <header class="mobile-header">
+      <button id="menu-toggle" class="icon-btn" aria-label="Abrir menu">☰</button>
+      <img src="/logo.jpeg?v=3" alt="Construcenter" class="mobile-logo" />
+      <span id="mobile-user-badge" class="badge badge-neutral"></span>
+    </header>
+
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <img src="/logo.jpeg?v=5" alt="Construcenter" class="sidebar-logo" />
+      </div>
+      <nav class="sidebar-nav" id="sidebar-nav">
+        <button class="nav-item active" data-view="dashboard">🏠 Painel Inicial</button>
+        <button class="nav-item nav-highlight" data-view="new-withdrawal">➕ Nova Retirada</button>
+        <button class="nav-item" data-view="withdrawals">📋 Conta Aberta / Retiradas</button>
+        <button class="nav-item" data-view="closing" data-roles="admin,gerente">🧾 Fechamento e Pedidos</button>
+        <button class="nav-item" data-view="orders-only" data-roles="atendente">🧾 Pedidos Gerados</button>
+        <button class="nav-item" data-view="customers">👥 Clientes</button>
+        <button class="nav-item" data-view="products">📦 Produtos</button>
+        <button class="nav-item" data-view="reports">📊 Relatórios</button>
+        <button class="nav-item" data-view="admin" data-roles="admin,gerente">⚙️ Administração</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="user-info">
+          <strong id="sidebar-user-name"></strong>
+          <span id="sidebar-user-role" class="badge badge-orange"></span>
+        </div>
+        <button id="logout-btn" class="btn btn-outline btn-sm" style="width:100%">Sair</button>
+      </div>
+    </aside>
+
+    <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
+
+    <main class="main-content">
+      <div id="toast-container" class="toast-container"></div>
+      <div id="view-container"></div>
+    </main>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal-box" id="modal-box">
+      <div class="modal-header">
+        <h2 id="modal-title"></h2>
+        <button id="modal-close" class="icon-btn" aria-label="Fechar">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/app.js?v=2"></script>
+</body>
+</html>

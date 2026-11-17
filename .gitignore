@@ -1,0 +1,8 @@
+node_modules/
+data/
+.env
+*.db
+*.db-wal
+*.db-shm
+logo_antigo_backup.jpeg
+Guia_Implantacao_Construcenter.pdf
