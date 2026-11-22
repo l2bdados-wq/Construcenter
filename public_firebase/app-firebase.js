@@ -147,6 +147,47 @@ function enrichWithdrawal(w) {
   return { ...w, items, returns, corrections: w.corrections || [], items_subtotal_cents, returns_total_cents, net_total_cents };
 }
 
+// Apply per-tenant logo and title across login, sidebar, mobile header, favicon, and PDFs
+function applyTenantBranding(store) {
+  const logoSrc = (store && store.logo_data_url) || '/logo.jpeg';
+  const brandName = (store && store.name) || TENANT_ID.toUpperCase();
+  window.TENANT_LOGO_URL = logoSrc;
+
+  document.querySelectorAll('.auth-logo, .mobile-logo, .sidebar-logo').forEach((img) => {
+    img.src = logoSrc;
+    img.alt = brandName;
+  });
+
+  const favicon = document.querySelector('link[rel="icon"]');
+  if (favicon) favicon.href = logoSrc;
+}
+
+function resizeLogoToDataUrl(file, maxW = 480, maxH = 240) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Falha ao ler o arquivo de imagem.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Arquivo de imagem inválido.'));
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width, maxH / img.height);
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 // Auth state listener
 async function refreshSession(fbUser) {
   const cfgSnap = await col('meta').doc('config').get();
@@ -155,7 +196,15 @@ async function refreshSession(fbUser) {
   const storeSnap = await col('meta').doc('store_settings').get();
   state.store = storeSnap.exists
     ? storeSnap.data()
-    : { name: 'CONSTRUCENTER', subtitle: 'Materiais para Construção e Elétrica em Geral', cnpj: '', phone: '', address: '' };
+    : {
+        name: TENANT_ID === 'construcenter' ? 'CONSTRUCENTER' : TENANT_ID.toUpperCase(),
+        subtitle: TENANT_ID === 'construcenter' ? 'Materiais para Construção e Elétrica em Geral' : '',
+        cnpj: '',
+        phone: '',
+        address: '',
+        logo_data_url: '',
+      };
+  applyTenantBranding(state.store);
 
   if (!fbUser || state.needsSetup) {
     state.user = null;
@@ -520,7 +569,9 @@ async function renderNewWithdrawal(container) {
     const btn = document.getElementById('nw-save-btn');
     const customer = state.customers.find((c) => c.id === custSelect.value);
     const picked = pickedInput.value.trim();
+    const rawDate = document.getElementById('nw-date').value;
     if (!customer) return toast('Selecione um cliente.', true);
+    if (!rawDate) return toast('Informe a data e hora da retirada.', true);
     if (!picked) return toast('Informe quem retirou.', true);
     if (state.cart.length === 0) return toast('Adicione pelo menos um produto.', true);
     btn.disabled = true;
@@ -533,7 +584,7 @@ async function renderNewWithdrawal(container) {
         const cntRef = col('meta').doc('counters');
         const cntSnap = await tx.get(cntRef);
         const nextNum = ((cntSnap.data()?.withdrawals) || 0) + 1;
-        const dateStr = document.getElementById('nw-date').value.replace('T', ' ') + ':00';
+        const dateStr = rawDate.replace('T', ' ') + ':00';
         const year = dateStr.slice(0, 4) || String(new Date().getFullYear());
         const code = `RET-${year}-${String(nextNum).padStart(4, '0')}`;
 
@@ -666,14 +717,38 @@ function openReturnModal(w, onDone) {
     const idx = Number(document.getElementById('ri').value);
     const qty = parseQty(document.getElementById('rq').value);
     const reason = document.getElementById('rr').value.trim();
-    const item = avail.find((x) => x.idx === idx);
-    if (!qty || qty <= 0 || qty > item.remaining_qty + 0.0001) return toast('Quantidade inválida.', true);
-    const retEntry = { item_idx: idx, product_description: item.product_description, quantity: qty, refund_cents: Math.round(qty * item.unit_price_cents), reason, returned_at: nowLocalISO() };
-    await col('withdrawals').doc(w.id).update({ returns: firebase.firestore.FieldValue.arrayUnion(retEntry) });
-    await writeAudit('RETURN_ITEM', 'withdrawals', w.id, reason, retEntry);
-    toast('Devolução registrada!');
-    closeModal();
-    await onDone();
+    if (!qty || qty <= 0) return toast('Quantidade inválida.', true);
+    if (!reason) return toast('Informe o motivo da devolução.', true);
+    try {
+      await db.runTransaction(async (tx) => {
+        const wRef = col('withdrawals').doc(w.id);
+        const wSnap = await tx.get(wRef);
+        if (!wSnap.exists) throw new Error('Retirada não encontrada.');
+        const current = enrichWithdrawal({ id: wSnap.id, ...wSnap.data() });
+        if (current.status !== 'aberta') {
+          throw new Error('Devoluções diretas só podem ser registradas em retiradas abertas.');
+        }
+        const item = current.items.find((x) => x.idx === idx);
+        if (!item || qty > item.remaining_qty + 0.0001) {
+          throw new Error('Quantidade devolvida excede o saldo disponível do item.');
+        }
+        const retEntry = {
+          item_idx: idx,
+          product_description: item.product_description,
+          quantity: qty,
+          refund_cents: Math.round(qty * item.unit_price_cents),
+          reason,
+          returned_at: nowLocalISO(),
+        };
+        tx.update(wRef, { returns: firebase.firestore.FieldValue.arrayUnion(retEntry) });
+      });
+      await writeAudit('RETURN_ITEM', 'withdrawals', w.id, reason, { item_idx: idx, quantity: qty });
+      toast('Devolução registrada!');
+      closeModal();
+      await onDone();
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 }
 
@@ -695,17 +770,55 @@ function openCorrectionModal(w, onDone) {
   document.getElementById('cof').addEventListener('submit', async (e) => {
     e.preventDefault();
     const reason = document.getElementById('cor-r').value.trim();
+    if (!reason) return toast('O motivo da correção é obrigatório.', true);
+    const newPicked = document.getElementById('cor-p').value.trim();
+    const newWork = document.getElementById('cor-w').value.trim();
+    const newDisc = parseBRCurrency(document.getElementById('cor-d').value);
     const corr = { user_name: state.user.name, reason, previous_picked_up_by: w.picked_up_by, previous_work: w.work_reference, previous_discount_cents: w.discount_cents || 0, created_at: nowLocalISO() };
-    await col('withdrawals').doc(w.id).update({
-      picked_up_by: document.getElementById('cor-p').value.trim(),
-      work_reference: document.getElementById('cor-w').value.trim(),
-      discount_cents: parseBRCurrency(document.getElementById('cor-d').value),
-      corrections: firebase.firestore.FieldValue.arrayUnion(corr),
-    });
-    await writeAudit('POST_CLOSE_CORRECTION', 'withdrawals', w.id, reason, corr);
-    toast('Correção registrada!');
-    closeModal();
-    await onDone();
+    try {
+      await db.runTransaction(async (tx) => {
+        const wRef = col('withdrawals').doc(w.id);
+        const wSnap = await tx.get(wRef);
+        if (!wSnap.exists) throw new Error('Retirada não encontrada.');
+        const curW = wSnap.data();
+
+        let orderSnap = null;
+        const oRef = curW.order_id ? col('orders').doc(curW.order_id) : null;
+        if (oRef) {
+          orderSnap = await tx.get(oRef);
+        }
+
+        tx.update(wRef, {
+          picked_up_by: newPicked,
+          work_reference: newWork,
+          discount_cents: newDisc,
+          corrections: firebase.firestore.FieldValue.arrayUnion(corr),
+        });
+
+        if (oRef && orderSnap && orderSnap.exists) {
+          const ord = orderSnap.data();
+          const discDiff = newDisc - (curW.discount_cents || 0);
+          const newOrderDisc = Math.max(0, (ord.discount_cents || 0) + discDiff);
+          const newOrderTotal = Math.max(0, (ord.subtotal_cents || 0) - (ord.returns_cents || 0) - newOrderDisc);
+          const updatedWithdrawals = (ord.withdrawals || []).map((ow) =>
+            ow.id === w.id
+              ? enrichWithdrawal({ ...ow, picked_up_by: newPicked, work_reference: newWork, discount_cents: newDisc })
+              : ow
+          );
+          tx.update(oRef, {
+            discount_cents: newOrderDisc,
+            total_cents: newOrderTotal,
+            withdrawals: updatedWithdrawals,
+          });
+        }
+      });
+      await writeAudit('POST_CLOSE_CORRECTION', 'withdrawals', w.id, reason, corr);
+      toast('Correção registrada!');
+      closeModal();
+      await onDone();
+    } catch (err) {
+      toast(err.message, true);
+    }
   });
 }
 
@@ -940,7 +1053,7 @@ function openProductModal(p, onDone) {
 }
 
 function openSpreadsheetImportModal(type, existingList, onDone) {
-  openModal(`Importar ${type === 'products' ? 'Produtos' : 'Clientes'} (.xlsx / .csv)`, `<div class="form-stack"><button class="btn btn-outline" id="imp-tpl">📥 Baixar Modelo (.xlsx)</button><input type="file" id="imp-f" accept=".xlsx,.csv,.txt" /><button class="btn btn-primary btn-lg" id="imp-go">🚀 Importar</button></div>`);
+  openModal(`Importar ${type === 'products' ? 'Produtos' : 'Clientes'} (.xlsx / .csv)`, `<div class="form-stack"><button class="btn btn-outline" id="imp-tpl">📥 Baixar Modelo (.xlsx)</button><input type="file" id="imp-f" accept=".xlsx,.csv,.txt" /><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="imp-upd" checked style="width:18px;height:18px" /><span>Atualizar registros já existentes</span></label><button class="btn btn-primary btn-lg" id="imp-go">🚀 Importar</button></div>`);
   document.getElementById('imp-tpl').addEventListener('click', () => {
     const rows = type === 'products' ? [{ Codigo: 'CABO25', Barras: '', Descricao: 'Cabo 2,5mm', Unidade: 'metro', Preco: 3.5, Situacao: 'ativo' }] : [{ Nome: 'Cliente Exemplo', CPF_CNPJ: '', Telefone: '', Endereco: '', Situacao: 'ativo' }];
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -951,32 +1064,79 @@ function openSpreadsheetImportModal(type, existingList, onDone) {
   document.getElementById('imp-go').addEventListener('click', async () => {
     const file = document.getElementById('imp-f').files?.[0];
     if (!file) return toast('Selecione um arquivo.', true);
-    const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: 'array' });
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-    let count = 0;
-    const batch = db.batch();
-    for (const r of rows) {
-      const norm = {};
-      for (const [k, v] of Object.entries(r)) norm[k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '')] = String(v ?? '').trim();
-      if (type === 'products') {
-        const code = norm.codigointerno || norm.codigo || norm.cod || '';
-        const desc = norm.descricao || norm.nome || norm.produto || '';
-        if (!code || !desc) continue;
-        const docRef = col('products').doc();
-        batch.set(docRef, { internal_code: code, barcode: norm.codigobarras || norm.ean || '', description: desc, unit: norm.unidade || 'unidade', price_cents: parseBRCurrency(norm.preco || norm.precodevenda || '0'), status: 'ativo', created_at: nowLocalISO() });
-        count++;
-      } else {
-        const name = norm.nome || norm.razaosocial || norm.cliente || '';
-        if (!name) continue;
-        batch.set(col('customers').doc(), { name, document: norm.cpfcnpj || norm.cpf || norm.cnpj || '', phone: norm.telefone || norm.whatsapp || '', address: norm.endereco || '', notes: '', status: 'ativo', authorized_people: [], created_at: nowLocalISO() });
-        count++;
+    const updateExisting = document.getElementById('imp-upd').checked;
+    const btn = document.getElementById('imp-go');
+    btn.disabled = true;
+    btn.textContent = 'Importando...';
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+      const ops = [];
+      let created = 0;
+      let updated = 0;
+
+      const byCode = new Map(existingList.map((p) => [String(p.internal_code || '').toLowerCase(), p]));
+      const byDoc = new Map(existingList.filter((c) => c.document).map((c) => [String(c.document).trim(), c]));
+      const byName = new Map(existingList.map((c) => [String(c.name || '').trim().toLowerCase(), c]));
+
+      for (const r of rows) {
+        const norm = {};
+        for (const [k, v] of Object.entries(r)) norm[k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '')] = String(v ?? '').trim();
+        if (type === 'products') {
+          const code = norm.codigointerno || norm.codigo || norm.cod || '';
+          const desc = norm.descricao || norm.nome || norm.produto || '';
+          if (!code || !desc) continue;
+          const payload = { internal_code: code, barcode: norm.codigobarras || norm.ean || '', description: desc, unit: norm.unidade || 'unidade', price_cents: parseBRCurrency(norm.preco || norm.precodevenda || '0'), status: 'ativo' };
+          const existing = byCode.get(code.toLowerCase());
+          if (existing) {
+            if (updateExisting) {
+              ops.push({ type: 'update', ref: col('products').doc(existing.id), data: payload });
+              updated++;
+            }
+          } else {
+            const newRef = col('products').doc();
+            ops.push({ type: 'set', ref: newRef, data: { ...payload, created_at: nowLocalISO() } });
+            byCode.set(code.toLowerCase(), { id: newRef.id, ...payload });
+            created++;
+          }
+        } else {
+          const name = norm.nome || norm.razaosocial || norm.cliente || '';
+          if (!name) continue;
+          const docVal = norm.cpfcnpj || norm.cpf || norm.cnpj || '';
+          const payload = { name, document: docVal, phone: norm.telefone || norm.whatsapp || '', address: norm.endereco || '', notes: '', status: 'ativo' };
+          const existing = (docVal ? byDoc.get(docVal) : null) || byName.get(name.toLowerCase());
+          if (existing) {
+            if (updateExisting) {
+              ops.push({ type: 'update', ref: col('customers').doc(existing.id), data: payload });
+              updated++;
+            }
+          } else {
+            const newRef = col('customers').doc();
+            ops.push({ type: 'set', ref: newRef, data: { ...payload, authorized_people: [], created_at: nowLocalISO() } });
+            byName.set(name.toLowerCase(), { id: newRef.id, ...payload });
+            created++;
+          }
+        }
       }
+
+      // Firestore batch limit is 500 writes -> chunk by 450
+      for (let i = 0; i < ops.length; i += 450) {
+        const batch = db.batch();
+        for (const op of ops.slice(i, i + 450)) {
+          if (op.type === 'update') batch.update(op.ref, op.data);
+          else batch.set(op.ref, op.data);
+        }
+        await batch.commit();
+      }
+      toast(`Importação concluída: ${created} novos, ${updated} atualizados!`);
+      closeModal();
+      await onDone();
+    } catch (err) {
+      toast(err.message, true);
+      btn.disabled = false;
+      btn.textContent = '🚀 Importar';
     }
-    await batch.commit();
-    toast(`${count} registro(s) importado(s)!`);
-    closeModal();
-    await onDone();
   });
 }
 
@@ -1037,19 +1197,57 @@ async function renderAdmin(container) {
   container.innerHTML = `
     <div class="page-header"><h1>Administração & Segurança</h1></div>
     ${isAdmin ? `<div class="grid-2">
-      <div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><h2 class="card-title" style="margin:0">Usuários</h2><button class="btn btn-primary btn-sm" id="anu">➕ Novo Usuário</button></div><table><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Status</th></tr></thead><tbody>${users.map((u) => `<tr><td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.username)}</td><td><span class="badge badge-orange">${u.role}</span></td><td><span class="badge badge-${u.active ? 'ativo' : 'inativo'}">${u.active ? 'Ativo' : 'Inativo'}</span></td></tr>`).join('')}</tbody></table></div>
-      <div class="card"><h2 class="card-title">Dados da Loja</h2><form id="asf" class="form-stack"><div><label>Nome</label><input type="text" id="sn" value="${escapeHtml(state.store.name)}" /></div><div><label>CNPJ</label><input type="text" id="sc" value="${escapeHtml(state.store.cnpj || '')}" /></div><div><label>Telefone</label><input type="text" id="sp" value="${escapeHtml(state.store.phone || '')}" /></div><div><label>Endereço</label><input type="text" id="sa" value="${escapeHtml(state.store.address || '')}" /></div><button type="submit" class="btn btn-dark">Salvar</button></form></div>
+      <div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:10px"><h2 class="card-title" style="margin:0">Usuários</h2><button class="btn btn-primary btn-sm" id="anu">➕ Novo Usuário</button></div><div class="table-wrap"><table><thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Status</th><th></th></tr></thead><tbody>${users.map((u) => `<tr><td>${escapeHtml(u.name)}</td><td>${escapeHtml(u.username)}</td><td><span class="badge badge-orange">${u.role}</span></td><td><span class="badge badge-${u.active ? 'ativo' : 'inativo'}">${u.active ? 'Ativo' : 'Inativo'}</span></td><td class="text-right">${u.id === state.user.uid ? '<span class="muted">Você</span>' : `<button class="btn btn-outline btn-sm aeu" data-id="${u.id}">Editar</button>`}</td></tr>`).join('')}</tbody></table></div></div>
+      <div class="card"><h2 class="card-title">Dados da Loja</h2><form id="asf" class="form-stack"><div><label>Nome</label><input type="text" id="sn" value="${escapeHtml(state.store.name)}" /></div><div><label>CNPJ</label><input type="text" id="sc" value="${escapeHtml(state.store.cnpj || '')}" /></div><div><label>Telefone</label><input type="text" id="sp" value="${escapeHtml(state.store.phone || '')}" /></div><div><label>Endereço</label><input type="text" id="sa" value="${escapeHtml(state.store.address || '')}" /></div><div><label>Logo da Empresa (PNG/JPG)</label><div style="display:flex;align-items:center;gap:12px;margin:6px 0"><img id="sl-preview" src="${escapeHtml(state.store.logo_data_url || '/logo.jpeg')}" alt="Logo atual" style="height:44px;max-width:160px;object-fit:contain;border:1px solid #e2e8f0;border-radius:6px;padding:4px;background:#fff" /><button type="button" id="sl-clear" class="btn btn-outline btn-sm">Usar Padrão</button></div><input type="file" id="sl" accept="image/*" /></div><button type="submit" class="btn btn-dark">Salvar</button></form></div>
     </div>` : ''}
     <div class="card"><h2 class="card-title">Auditoria</h2><div class="table-wrap"><table><thead><tr><th>Data</th><th>Usuário</th><th>Ação</th><th>Entidade</th><th>Detalhes</th></tr></thead><tbody>${logs.slice(0, 60).map((l) => `<tr><td>${formatDateTime(l.created_at)}</td><td>${escapeHtml(l.user_name)}</td><td><strong>${escapeHtml(l.action)}</strong></td><td>${escapeHtml(l.entity)}</td><td class="muted">${escapeHtml(l.reason || l.details)}</td></tr>`).join('')}</tbody></table></div></div>
   `;
   if (isAdmin) {
+    let pendingLogoDataUrl = state.store.logo_data_url || '';
+    const logoInput = document.getElementById('sl');
+    const logoPreview = document.getElementById('sl-preview');
+    logoInput.addEventListener('change', async (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+        pendingLogoDataUrl = await resizeLogoToDataUrl(file);
+        logoPreview.src = pendingLogoDataUrl;
+      } catch (err) {
+        toast(err.message, true);
+      }
+    });
+    document.getElementById('sl-clear').addEventListener('click', () => {
+      pendingLogoDataUrl = '';
+      logoInput.value = '';
+      logoPreview.src = '/logo.jpeg';
+    });
     document.getElementById('asf').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const s = { ...state.store, name: document.getElementById('sn').value.trim(), cnpj: document.getElementById('sc').value.trim(), phone: document.getElementById('sp').value.trim(), address: document.getElementById('sa').value.trim() };
+      const s = { ...state.store, name: document.getElementById('sn').value.trim(), cnpj: document.getElementById('sc').value.trim(), phone: document.getElementById('sp').value.trim(), address: document.getElementById('sa').value.trim(), logo_data_url: pendingLogoDataUrl };
       await col('meta').doc('store_settings').set(s);
       state.store = s;
+      applyTenantBranding(s);
       toast('Dados salvos!');
     });
+    document.querySelectorAll('.aeu').forEach((b) => {
+      b.addEventListener('click', () => {
+        const u = users.find((x) => x.id === b.dataset.id);
+        if (!u) return;
+        openModal(`Editar Usuário — ${u.username}`, `<form id="euf" class="form-stack"><div><label>Nome *</label><input type="text" id="eun" required value="${escapeHtml(u.name)}" /></div><div><label>Perfil</label><select id="eur"><option value="atendente" ${u.role === 'atendente' ? 'selected' : ''}>Atendente</option><option value="gerente" ${u.role === 'gerente' ? 'selected' : ''}>Gerente</option><option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Administrador</option></select></div><div><label>Situação</label><select id="eua"><option value="1" ${u.active ? 'selected' : ''}>Ativo</option><option value="0" ${!u.active ? 'selected' : ''}>Inativo</option></select></div><button type="submit" class="btn btn-primary btn-lg">Salvar Alterações</button></form>`);
+        document.getElementById('euf').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          await col('users').doc(u.id).update({
+            name: document.getElementById('eun').value.trim(),
+            role: document.getElementById('eur').value,
+            active: document.getElementById('eua').value === '1',
+          });
+          toast('Usuário atualizado!');
+          closeModal();
+          renderAdmin(container);
+        });
+      });
+    });
+
     document.getElementById('anu').addEventListener('click', () => {
       openModal('Novo Usuário', `<form id="nuf" class="form-stack"><div><label>Nome *</label><input type="text" id="nun" required /></div><div><label>Usuário *</label><input type="text" id="nuu" required /></div><div><label>Perfil</label><select id="nur"><option value="atendente">Atendente</option><option value="gerente">Gerente</option><option value="admin">Administrador</option></select></div><div><label>Senha (mín. 6 caracteres) *</label><input type="password" id="nup" required minlength="6" /></div><button type="submit" class="btn btn-primary btn-lg">Criar Usuário</button></form>`);
       document.getElementById('nuf').addEventListener('submit', async (e) => {

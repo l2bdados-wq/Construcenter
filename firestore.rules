@@ -37,7 +37,9 @@ service cloud.firestore {
           || isAdmin(tenantId)
         );
         allow update: if isAdmin(tenantId)
-          || (docId == 'counters' && isActiveUser(tenantId));
+          || (docId == 'counters' && isActiveUser(tenantId)
+              && request.resource.data.get('withdrawals', 0) >= resource.data.get('withdrawals', 0)
+              && request.resource.data.get('orders', 0) >= resource.data.get('orders', 0));
       }
 
       // Users & roles
@@ -70,13 +72,16 @@ service cloud.firestore {
       match /withdrawals/{withdrawalId} {
         allow read: if isActiveUser(tenantId);
         allow create: if isActiveUser(tenantId)
+          && request.resource.data.discount_cents >= 0
           && (request.resource.data.discount_cents == 0 || isManagerOrAdmin(tenantId));
         // Direct edits on closed withdrawals are blocked unless manager/admin with correction or order closing
-        allow update: if isActiveUser(tenantId) && (
-          (resource.data.status == 'aberta' && request.resource.data.status == 'aberta'
-            && (request.resource.data.discount_cents == resource.data.discount_cents || isManagerOrAdmin(tenantId)))
-          || isManagerOrAdmin(tenantId)
-        );
+        allow update: if isActiveUser(tenantId)
+          && request.resource.data.discount_cents >= 0
+          && (
+            (resource.data.status == 'aberta' && request.resource.data.status == 'aberta'
+              && (request.resource.data.discount_cents == resource.data.discount_cents || isManagerOrAdmin(tenantId)))
+            || isManagerOrAdmin(tenantId)
+          );
         allow delete: if false;
       }
 

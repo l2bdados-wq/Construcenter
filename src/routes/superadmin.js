@@ -12,7 +12,10 @@ const { BASE_DOMAIN } = require('../middleware/tenant');
 const router = express.Router();
 
 function requireSuperAdmin(req, res, next) {
-  const configuredKey = process.env.SUPER_ADMIN_KEY || 'l2admin2026';
+  const configuredKey = process.env.SUPER_ADMIN_KEY;
+  if (!configuredKey) {
+    return res.status(503).json({ error: 'SUPER_ADMIN_KEY não configurada no servidor.' });
+  }
   const provided = req.headers['x-super-admin-key'] || '';
   if (!provided || provided !== configuredKey) {
     return res.status(401).json({ error: 'Chave de Super-Administrador inválida.' });
